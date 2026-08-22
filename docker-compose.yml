@@ -1,0 +1,3 @@
+# Docker services for AI Interviewer
+# Whisper Docker removed — using AICredits API (https://api.aicredits.in/v1/audio/transcriptions)
+services: {}

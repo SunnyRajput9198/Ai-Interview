@@ -1,0 +1,127 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ── Project ──────────────────────────────────────────────────
+
+model Project {
+  id           String      @id @default(uuid())
+  name         String
+  description  String?
+  technologies String[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  documents    Document[]
+  interviews   Interview[]
+}
+
+// ── Document ─────────────────────────────────────────────────
+
+model Document {
+  id                  String              @id @default(uuid())
+  projectId           String?
+  project             Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  knowledgeSourceType KnowledgeSourceType
+  name                String
+  description         String?
+  mimeType            String
+  fileSize            Int
+  storagePath         String
+  processingStatus    ProcessingStatus    @default(UPLOADED)
+  metadata            Json?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  chunks              DocumentChunk[]
+}
+
+// ── DocumentChunk ─────────────────────────────────────────────
+
+model DocumentChunk {
+  id         String                      @id @default(uuid())
+  documentId String
+  document   Document                    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  chunkIndex Int
+  content    String
+  embedding  Unsupported("vector(1536)")?
+  metadata   Json?
+  createdAt  DateTime                    @default(now())
+}
+
+// ── Interview ─────────────────────────────────────────────────
+
+model Interview {
+  id            String          @id @default(uuid())
+  interviewType InterviewType   @default(TECHNICAL)
+  projectId     String?
+  project       Project?        @relation(fields: [projectId], references: [id])
+  topics        String[]
+  status        InterviewStatus
+  score         Int?
+  subScores     Json?
+  feedback      String?
+  citations     String[]
+  usedChunks    Json?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  conversations Message[]
+}
+
+// ── Message ───────────────────────────────────────────────────
+
+model Message {
+  id          String      @id @default(uuid())
+  message     String
+  type        MessageType
+  interviewId String
+  interview   Interview   @relation(fields: [interviewId], references: [id])
+  createdAt   DateTime    @default(now())
+}
+
+// ── Enums ─────────────────────────────────────────────────────
+
+enum KnowledgeSourceType {
+  RESUME
+  PROJECT
+  ARCHITECTURE
+  TECHNICAL_NOTES
+  API_DOCUMENTATION
+  DATABASE_DOCUMENTATION
+  DEPLOYMENT
+  INTERVIEW_PREPARATION
+  OTHER
+}
+
+enum ProcessingStatus {
+  UPLOADED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum InterviewType {
+  TECHNICAL
+  PROJECT
+  HR
+  FULL
+}
+
+enum MessageType {
+  User
+  Assistant
+}
+
+enum InterviewStatus {
+  Pre
+  InProgress
+  Done
+}
