@@ -7,11 +7,27 @@ import { Button } from "./ui/button";
 import { VoiceOrb } from "./VoiceOrb";
 import { cn } from "@/lib/utils";
 
-type Status = "connecting" | "live" | "recording" | "processing" | "ai_speaking" | "ending";
+type Status =
+  | "connecting"
+  | "live"
+  | "recording"
+  | "processing"
+  | "ai_speaking"
+  | "ending";
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+interface InterviewProgress {
+  questionLimit: number;
+  questionsAsked: number;
+  questionsAnswered: number;
+  currentTopic: string | null;
+  currentDifficulty: string;
+  remainingQuestions: number;
+  completed: boolean;
 }
 
 function createLevelMeter(ctx: AudioContext, stream: MediaStream) {
@@ -43,6 +59,7 @@ export function Interview() {
   const [lastAiText, setLastAiText] = useState("");
   const [lastUserText, setLastUserText] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [progress, setProgress] = useState<InterviewProgress | null>(null);
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -55,7 +72,9 @@ export function Interview() {
   const messagesRef = useRef<ChatMessage[]>([]);
 
   // Keep ref in sync with state so callbacks always have latest messages
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // ── Mic setup on mount ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -63,7 +82,10 @@ export function Interview() {
     (async () => {
       try {
         const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (cancelled) { ms.getTracks().forEach((t) => t.stop()); return; }
+        if (cancelled) {
+          ms.getTracks().forEach((t) => t.stop());
+          return;
+        }
 
         streamRef.current = ms;
         const ctx = new AudioContext();
@@ -77,44 +99,76 @@ export function Interview() {
         };
         rafRef.current = requestAnimationFrame(tick);
 
+        const { data } = await axios.get(
+          `${BACKEND_URL}/api/voice/session/${interviewId}`,
+        );
+        const savedMessages: ChatMessage[] = data.messages ?? [];
+        setMessages(savedMessages);
+        messagesRef.current = savedMessages;
+        setProgress(data.progress ?? null);
+        setLastAiText(
+          [...savedMessages].reverse().find((m) => m.role === "assistant")
+            ?.content ?? "",
+        );
+        setLastUserText(
+          [...savedMessages].reverse().find((m) => m.role === "user")
+            ?.content ?? "",
+        );
         setStatus("live");
-        // Kick off — get AI opening question
-        await getAiResponse([]);
+        if (savedMessages.length === 0) await getAiResponse([]);
       } catch (err) {
         console.error("[Interview] Mic setup error:", err);
-        setErrorMsg("Microphone access denied. Please allow mic access and refresh.");
+        const microphoneDenied =
+          err instanceof DOMException &&
+          ["NotAllowedError", "PermissionDeniedError"].includes(err.name);
+        setErrorMsg(
+          microphoneDenied
+            ? "Microphone access denied. Please allow mic access and refresh."
+            : "Could not restore this interview session. Please refresh to try again.",
+        );
         setStatus("live");
       }
     })();
 
-    return () => { cancelled = true; cleanup(); };
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interviewId]);
 
   // ── Get AI response ─────────────────────────────────────────────────────────
-  const getAiResponse = useCallback(async (currentMessages: ChatMessage[]) => {
-    setStatus("processing");
-    setErrorMsg("");
-    try {
-      const { data } = await axios.post(`${BACKEND_URL}/api/voice/respond`, {
-        interviewId,
-        messages: currentMessages,
-      });
-      const aiText: string = data.response ?? "";
-      setLastAiText(aiText);
+  const getAiResponse = useCallback(
+    async (currentMessages: ChatMessage[]) => {
+      setStatus("processing");
+      setErrorMsg("");
+      try {
+        const { data } = await axios.post(`${BACKEND_URL}/api/voice/respond`, {
+          interviewId,
+          messages: currentMessages,
+        });
+        const aiText: string = data.response ?? "";
+        if (data.progress) setProgress(data.progress);
+        setLastAiText(aiText);
 
-      const updated = [...currentMessages, { role: "assistant" as const, content: aiText }];
-      setMessages(updated);
-      messagesRef.current = updated;
+        const updated = [
+          ...currentMessages,
+          { role: "assistant" as const, content: aiText },
+        ];
+        setMessages(updated);
+        messagesRef.current = updated;
 
-      await playAiSpeech(aiText);
-    } catch (err: any) {
-      console.error("[Interview] AI respond error:", err);
-      const detail = err?.response?.data?.details ?? err?.message ?? "Unknown error";
-      setErrorMsg(`AI error: ${detail}`);
-      setStatus("live");
-    }
-  }, [interviewId]);
+        await playAiSpeech(aiText);
+      } catch (err: any) {
+        console.error("[Interview] AI respond error:", err);
+        const detail =
+          err?.response?.data?.details ?? err?.message ?? "Unknown error";
+        setErrorMsg(`AI error: ${detail}`);
+        setStatus("live");
+      }
+    },
+    [interviewId],
+  );
 
   // ── TTS playback ────────────────────────────────────────────────────────────
   const playAiSpeech = async (text: string) => {
@@ -142,8 +196,17 @@ export function Interview() {
       }, 80);
 
       await new Promise<void>((resolve) => {
-        audio.onended = () => { clearInterval(interval); aiLevelRef.current = 0; URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { clearInterval(interval); aiLevelRef.current = 0; resolve(); };
+        audio.onended = () => {
+          clearInterval(interval);
+          aiLevelRef.current = 0;
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+        audio.onerror = () => {
+          clearInterval(interval);
+          aiLevelRef.current = 0;
+          resolve();
+        };
         audio.play().catch(() => resolve());
       });
     } catch (err: any) {
@@ -171,12 +234,17 @@ export function Interview() {
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
       : MediaRecorder.isTypeSupported("audio/webm")
-      ? "audio/webm"
-      : "";
+        ? "audio/webm"
+        : "";
 
-    const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
+    const recorder = new MediaRecorder(
+      streamRef.current,
+      mimeType ? { mimeType } : undefined,
+    );
     recorderRef.current = recorder;
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
     recorder.start(100);
     setStatus("recording");
     setErrorMsg("");
@@ -207,7 +275,7 @@ export function Interview() {
       const { data: transcribeData } = await axios.post(
         `${BACKEND_URL}/api/voice/transcribe`,
         fd,
-        { headers: { "Content-Type": "multipart/form-data" } }
+        { headers: { "Content-Type": "multipart/form-data" } },
       );
 
       const transcript: string = transcribeData.transcript?.trim() ?? "";
@@ -227,7 +295,8 @@ export function Interview() {
       await getAiResponse(updatedMessages);
     } catch (err: any) {
       console.error("[Interview] Processing error:", err);
-      const detail = err?.response?.data?.details ?? err?.message ?? "Unknown error";
+      const detail =
+        err?.response?.data?.details ?? err?.message ?? "Unknown error";
       setErrorMsg(`Transcription error: ${detail}`);
       setStatus("live");
     }
@@ -269,23 +338,38 @@ export function Interview() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-border/40">
         <div className="flex items-center gap-2 text-sm font-medium">
           <span className="relative flex size-2.5">
-            <span className={cn(
-              "absolute inline-flex h-full w-full animate-ping rounded-full opacity-75",
-              status === "recording" ? "bg-red-400" :
-              status === "ai_speaking" ? "bg-violet-400" :
-              status === "live" ? "bg-emerald-400" : "hidden"
-            )} />
-            <span className={cn(
-              "relative inline-flex size-2.5 rounded-full",
-              status === "connecting" ? "bg-amber-400" :
-              status === "recording" ? "bg-red-400" :
-              status === "ai_speaking" ? "bg-violet-400" :
-              status === "ending" ? "bg-muted-foreground" : "bg-emerald-400"
-            )} />
+            <span
+              className={cn(
+                "absolute inline-flex h-full w-full animate-ping rounded-full opacity-75",
+                status === "recording"
+                  ? "bg-red-400"
+                  : status === "ai_speaking"
+                    ? "bg-violet-400"
+                    : status === "live"
+                      ? "bg-emerald-400"
+                      : "hidden",
+              )}
+            />
+            <span
+              className={cn(
+                "relative inline-flex size-2.5 rounded-full",
+                status === "connecting"
+                  ? "bg-amber-400"
+                  : status === "recording"
+                    ? "bg-red-400"
+                    : status === "ai_speaking"
+                      ? "bg-violet-400"
+                      : status === "ending"
+                        ? "bg-muted-foreground"
+                        : "bg-emerald-400",
+              )}
+            />
           </span>
           <span className="transition-all duration-200">{statusLabel}</span>
         </div>
-        <span className="text-sm text-muted-foreground font-medium">AI Interview</span>
+        <span className="text-sm text-muted-foreground font-medium">
+          AI Interview
+        </span>
       </header>
 
       {/* Main area */}
@@ -297,6 +381,17 @@ export function Interview() {
           </div>
         ) : (
           <>
+            {progress && (
+              <div className="text-center text-xs text-muted-foreground">
+                {progress.completed
+                  ? `Completed ${progress.questionsAnswered} questions`
+                  : `Question ${Math.min(progress.questionsAsked, progress.questionLimit)} of ${progress.questionLimit}`}
+                {progress.currentTopic ? ` · ${progress.currentTopic}` : ""}
+                {progress.currentDifficulty
+                  ? ` · ${progress.currentDifficulty}`
+                  : ""}
+              </div>
+            )}
             {/* Voice orbs */}
             <div className="flex w-full max-w-2xl items-center justify-center gap-16 sm:gap-28">
               <VoiceOrb
@@ -321,13 +416,17 @@ export function Interview() {
             <div className="w-full max-w-lg flex flex-col gap-2">
               {lastAiText && (
                 <div className="rounded-2xl rounded-tl-sm bg-card border border-border/60 px-4 py-3 text-sm leading-relaxed">
-                  <span className="text-xs font-semibold text-violet-400 block mb-1">Interviewer</span>
+                  <span className="text-xs font-semibold text-violet-400 block mb-1">
+                    Interviewer
+                  </span>
                   {lastAiText}
                 </div>
               )}
               {lastUserText && (
                 <div className="rounded-2xl rounded-tr-sm bg-primary/10 border border-primary/20 px-4 py-3 text-sm leading-relaxed self-end text-right">
-                  <span className="text-xs font-semibold text-emerald-400 block mb-1">You</span>
+                  <span className="text-xs font-semibold text-emerald-400 block mb-1">
+                    You
+                  </span>
                   {lastUserText}
                 </div>
               )}
@@ -344,14 +443,14 @@ export function Interview() {
             <div className="flex flex-col items-center gap-3 mt-2">
               <button
                 onClick={toggleRecording}
-                disabled={isProcessing || status === "connecting"}
+                disabled={isProcessing || Boolean(progress?.completed)}
                 className={cn(
                   "relative flex size-20 items-center justify-center rounded-full transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   status === "recording"
                     ? "bg-red-500 shadow-[0_0_0_12px_rgba(239,68,68,0.15)] scale-110"
                     : isProcessing
-                    ? "bg-muted cursor-not-allowed scale-95"
-                    : "bg-primary shadow-[0_0_0_8px_rgba(var(--primary),0.12)] hover:scale-105 active:scale-95"
+                      ? "bg-muted cursor-not-allowed scale-95"
+                      : "bg-primary shadow-[0_0_0_8px_rgba(var(--primary),0.12)] hover:scale-105 active:scale-95",
                 )}
               >
                 {isProcessing ? (
@@ -375,8 +474,10 @@ export function Interview() {
                 {status === "recording"
                   ? "🔴 Recording — tap to send"
                   : isProcessing
-                  ? status === "ai_speaking" ? "AI is speaking…" : "Processing…"
-                  : "Tap to speak"}
+                    ? status === "ai_speaking"
+                      ? "AI is speaking…"
+                      : "Processing…"
+                    : "Tap to speak"}
               </p>
             </div>
           </>
@@ -389,7 +490,9 @@ export function Interview() {
           variant="ghost"
           size="sm"
           onClick={endInterview}
-          disabled={status === "ending"}
+          disabled={
+            status === "ending" || isProcessing || status === "recording"
+          }
           className="gap-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
         >
           {status === "ending" ? (
@@ -397,7 +500,7 @@ export function Interview() {
           ) : (
             <PhoneOff className="size-4" />
           )}
-          End Interview
+          {progress?.completed ? "View Results" : "End Interview"}
         </Button>
       </footer>
     </main>

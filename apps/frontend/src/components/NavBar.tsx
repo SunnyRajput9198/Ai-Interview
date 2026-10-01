@@ -1,5 +1,12 @@
 import { NavLink, useNavigate } from "react-router";
-import { Mic, LayoutDashboard, FolderOpen, BookOpen } from "lucide-react";
+import {
+  Mic,
+  LayoutDashboard,
+  FolderOpen,
+  BookOpen,
+  Brain,
+  ChartNoAxesCombined,
+} from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 
@@ -30,7 +37,7 @@ export function NavBar() {
                 "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                 isActive
                   ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )
             }
           >
@@ -44,7 +51,7 @@ export function NavBar() {
                 "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                 isActive
                   ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )
             }
           >
@@ -58,17 +65,49 @@ export function NavBar() {
                 "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                 isActive
                   ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )
             }
           >
             <BookOpen className="size-3.5" />
             Knowledge
           </NavLink>
+          <NavLink
+            to="/practice"
+            className={({ isActive }) =>
+              cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                isActive
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )
+            }
+          >
+            <Brain className="size-3.5" />
+            AI Practice
+          </NavLink>
+          <NavLink
+            to="/analytics"
+            className={({ isActive }) =>
+              cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                isActive
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )
+            }
+          >
+            <ChartNoAxesCombined className="size-3.5" />
+            Performance
+          </NavLink>
         </nav>
 
         {/* CTA */}
-        <Button size="sm" onClick={() => navigate("/interview/new")} className="gap-1.5">
+        <Button
+          size="sm"
+          onClick={() => navigate("/interview/new")}
+          className="gap-1.5"
+        >
           <Mic className="size-3.5" />
           New Interview
         </Button>

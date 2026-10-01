@@ -1,43 +1,13 @@
 import { Router } from "express";
-import multer from "multer";
-import path from "path";
 import { prisma, Prisma } from "../db";
 import { processDocument } from "../processing-pipeline";
+import { handleDocumentUpload } from "../document-upload";
+import { KnowledgeSourceTypeSchema } from "../types";
 
 const router = Router();
 
-const maxSizeMB = parseInt(process.env.MAX_DOCUMENT_SIZE_MB ?? "20", 10);
-
-const ALLOWED_MIME_TYPES = new Set([
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, "uploads/"),
-  filename: (_req, file, cb) => {
-    const unique = `${Date.now()}-${crypto.randomUUID()}`;
-    const ext = path.extname(file.originalname);
-    cb(null, `${unique}${ext}`);
-  },
-});
-
-export const upload = multer({
-  storage,
-  limits: { fileSize: maxSizeMB * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Unsupported file type. Allowed: pdf, txt, md, docx"));
-    }
-  },
-});
-
 // POST /api/documents
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/", handleDocumentUpload, async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded" });
     return;
@@ -49,14 +19,17 @@ router.post("/", upload.single("file"), async (req, res) => {
     description?: string;
   };
 
-  if (!knowledgeSourceType) {
-    res.status(400).json({ error: "knowledgeSourceType is required" });
+  const sourceType = KnowledgeSourceTypeSchema.safeParse(knowledgeSourceType);
+  if (!sourceType.success) {
+    res.status(400).json({ error: "A valid knowledgeSourceType is required" });
     return;
   }
 
   // Validate projectId if provided
   if (projectId) {
-    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    });
     if (!project) {
       res.status(404).json({ error: "Project not found" });
       return;
@@ -66,7 +39,7 @@ router.post("/", upload.single("file"), async (req, res) => {
   const doc = await prisma.document.create({
     data: {
       projectId: projectId ?? null,
-      knowledgeSourceType: knowledgeSourceType as any,
+      knowledgeSourceType: sourceType.data,
       name: req.file.originalname,
       description: description?.trim() ?? null,
       mimeType: req.file.mimetype,
@@ -132,14 +105,18 @@ router.get("/:id", async (req, res) => {
 
 // DELETE /api/documents/:id
 router.delete("/:id", async (req, res) => {
-  const doc = await prisma.document.findUnique({ where: { id: req.params.id } });
+  const doc = await prisma.document.findUnique({
+    where: { id: req.params.id },
+  });
   if (!doc) {
     res.status(404).json({ error: "Document not found" });
     return;
   }
 
   // Delete chunks first (cascade handles it, but be explicit)
-  await prisma.documentChunk.deleteMany({ where: { documentId: req.params.id } });
+  await prisma.documentChunk.deleteMany({
+    where: { documentId: req.params.id },
+  });
   await prisma.document.delete({ where: { id: req.params.id } });
 
   // Delete file from disk
@@ -160,7 +137,9 @@ router.delete("/:id", async (req, res) => {
 
 // POST /api/documents/:id/reprocess
 router.post("/:id/reprocess", async (req, res) => {
-  const doc = await prisma.document.findUnique({ where: { id: req.params.id } });
+  const doc = await prisma.document.findUnique({
+    where: { id: req.params.id },
+  });
   if (!doc) {
     res.status(404).json({ error: "Document not found" });
     return;

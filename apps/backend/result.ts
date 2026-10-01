@@ -1,11 +1,7 @@
 import { z } from "zod";
-import OpenAI from "openai";
+import { getAIClient } from "./ai-client";
+import { EVALUATION_MODEL } from "./config";
 import type { RetrievedChunk } from "./knowledge-retrieval";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_KEY,
-  baseURL: "https://aicredits.in/v1",
-});
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -28,7 +24,9 @@ const outputSchema = z.object({
   citations: z
     .array(z.string())
     .optional()
-    .describe("Document names whose content was relevant to evaluating answers"),
+    .describe(
+      "Document names whose content was relevant to evaluating answers",
+    ),
   weaknesses: z
     .array(z.string())
     .optional()
@@ -42,7 +40,7 @@ export type EvaluationResult = z.infer<typeof outputSchema>;
 function buildEvaluationPrompt(
   messages: { type: string; message: string; createdAt: Date }[],
   interviewType: string,
-  usedChunks: RetrievedChunk[] | null
+  usedChunks: RetrievedChunk[] | null,
 ): string {
   const isProject = interviewType === "PROJECT";
 
@@ -88,20 +86,18 @@ Omit "subScores" if this is not a PROJECT interview.`;
 export async function calculateResult(
   messages: { type: "Assistant" | "User"; message: string; createdAt: Date }[],
   interviewType = "TECHNICAL",
-  usedChunks: RetrievedChunk[] | null = null
+  usedChunks: RetrievedChunk[] | null = null,
 ): Promise<EvaluationResult> {
   const prompt = buildEvaluationPrompt(messages, interviewType, usedChunks);
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+  const response = await getAIClient().chat.completions.create({
+    model: EVALUATION_MODEL,
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.3,
   });
 
   const text = response.choices[0]?.message?.content ?? "{}";
-  console.log("[result] OpenAI evaluation response:", text);
-
   const parsed = outputSchema.parse(JSON.parse(text));
   return parsed;
 }

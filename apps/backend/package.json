@@ -33,5 +33,9 @@
     "zod": "^4.4.3",
     "zod-to-json-schema": "^3.25.2"
   },
-  "scripts": {}
+  "scripts": {
+    "dev": "bun --watch index.ts",
+    "start": "bun index.ts",
+    "check-types": "tsc --noEmit"
+  }
 }

@@ -1,4 +1,7 @@
-import { prisma } from "./db";
+import { prisma, Prisma } from "./db";
+import { createEmbeddings } from "./ai-client";
+import { z } from "zod";
+import type { InterviewType, KnowledgeSourceType } from "./types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -9,42 +12,14 @@ export interface RetrievedChunk {
   content: string;
 }
 
-type KnowledgeSourceType =
-  | "RESUME"
-  | "PROJECT"
-  | "ARCHITECTURE"
-  | "TECHNICAL_NOTES"
-  | "API_DOCUMENTATION"
-  | "DATABASE_DOCUMENTATION"
-  | "DEPLOYMENT"
-  | "INTERVIEW_PREPARATION"
-  | "OTHER";
-
-type InterviewType = "TECHNICAL" | "PROJECT" | "HR" | "FULL";
-
-// ── Internal: embed a query string ───────────────────────────────────────────
-
-async function embedQuery(query: string): Promise<number[]> {
-  const response = await fetch("https://aicredits.in/v1/embeddings", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "text-embedding-3-small",
-      input: query,
-      dimensions: 1536,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`OpenAI embeddings error: ${await response.text()}`);
-  }
-
-  const json = (await response.json()) as { data: { embedding: number[] }[] };
-  return json.data[0]!.embedding;
-}
+export const RetrievedChunksSchema = z.array(
+  z.object({
+    documentId: z.string(),
+    documentName: z.string(),
+    chunkIndex: z.number(),
+    content: z.string(),
+  }),
+);
 
 function vectorToSql(vec: number[]): string {
   return `[${vec.join(",")}]`;
@@ -69,17 +44,27 @@ function mapRows(rows: ChunkRow[]): RetrievedChunk[] {
   }));
 }
 
-// ── retrieveForProject ────────────────────────────────────────────────────────
+async function retrieveChunks(options: {
+  query: string;
+  topK: number;
+  projectId?: string;
+  sourceTypes?: KnowledgeSourceType[];
+}): Promise<RetrievedChunk[]> {
+  const [embedding] = await createEmbeddings([options.query]);
+  if (!embedding) throw new Error("Embedding service returned no vector");
+  const vector = vectorToSql(embedding);
+  const sourceFilter = options.sourceTypes
+    ? options.sourceTypes.length === 0
+      ? null
+      : Prisma.sql`AND d."knowledgeSourceType" IN (${Prisma.join(options.sourceTypes)})`
+    : Prisma.empty;
+  if (sourceFilter === null) return [];
 
-export async function retrieveForProject(
-  projectId: string,
-  query: string,
-  topK = 5
-): Promise<RetrievedChunk[]> {
-  const embedding = await embedQuery(query);
-  const vecStr = vectorToSql(embedding);
+  const projectFilter = options.projectId
+    ? Prisma.sql`AND d."projectId" = ${options.projectId}`
+    : Prisma.empty;
 
-  const rows = await prisma.$queryRaw<ChunkRow[]>`
+  const rows = await prisma.$queryRaw<ChunkRow[]>(Prisma.sql`
     SELECT
       dc.id,
       dc."documentId",
@@ -88,14 +73,25 @@ export async function retrieveForProject(
       dc.content
     FROM "DocumentChunk" dc
     JOIN "Document" d ON dc."documentId" = d.id
-    WHERE d."projectId" = ${projectId}
-      AND d."processingStatus" = 'PROCESSED'
+    WHERE d."processingStatus" = 'PROCESSED'
       AND dc.embedding IS NOT NULL
-    ORDER BY dc.embedding <=> ${vecStr}::vector ASC
-    LIMIT ${topK}
-  `;
+      ${projectFilter}
+      ${sourceFilter}
+    ORDER BY dc.embedding <=> ${vector}::vector ASC
+    LIMIT ${options.topK}
+  `);
 
   return mapRows(rows);
+}
+
+// ── retrieveForProject ────────────────────────────────────────────────────────
+
+export async function retrieveForProject(
+  projectId: string,
+  query: string,
+  topK = 5,
+): Promise<RetrievedChunk[]> {
+  return retrieveChunks({ projectId, query, topK });
 }
 
 // ── retrieveForTopic ──────────────────────────────────────────────────────────
@@ -103,31 +99,9 @@ export async function retrieveForProject(
 export async function retrieveForTopic(
   sourceTypes: KnowledgeSourceType[],
   query: string,
-  topK = 5
+  topK = 5,
 ): Promise<RetrievedChunk[]> {
-  const embedding = await embedQuery(query);
-  const vecStr = vectorToSql(embedding);
-
-  // Prisma raw doesn't support array params nicely; build the IN list safely
-  const typeList = sourceTypes.map((t) => `'${t}'`).join(",");
-
-  const rows = await prisma.$queryRawUnsafe<ChunkRow[]>(`
-    SELECT
-      dc.id,
-      dc."documentId",
-      d.name AS "documentName",
-      dc."chunkIndex",
-      dc.content
-    FROM "DocumentChunk" dc
-    JOIN "Document" d ON dc."documentId" = d.id
-    WHERE d."knowledgeSourceType" IN (${typeList})
-      AND d."processingStatus" = 'PROCESSED'
-      AND dc.embedding IS NOT NULL
-    ORDER BY dc.embedding <=> '${vecStr}'::vector ASC
-    LIMIT ${topK}
-  `);
-
-  return mapRows(rows);
+  return retrieveChunks({ sourceTypes, query, topK });
 }
 
 // ── retrieveForInterview ──────────────────────────────────────────────────────
@@ -135,7 +109,7 @@ export async function retrieveForTopic(
 export async function retrieveForInterview(
   interviewId: string,
   query: string,
-  topK = 8
+  topK = 8,
 ): Promise<RetrievedChunk[]> {
   const interview = await prisma.interview.findUnique({
     where: { id: interviewId },
@@ -162,12 +136,17 @@ export async function retrieveForQuestion(context: {
   const { interviewType, projectId, questionText, topK = 8 } = context;
 
   // PROJECT: use project documents (all types)
-  if (interviewType === "PROJECT" && projectId) {
+  if (
+    ["PROJECT", "SYSTEM_DESIGN", "AI_ML", "MIXED"].includes(interviewType) &&
+    projectId
+  ) {
     return retrieveForProject(projectId, questionText, topK);
   }
 
   // TECHNICAL: technical notes, resume, architecture, project docs
-  if (interviewType === "TECHNICAL") {
+  if (
+    ["TECHNICAL", "AI_ML", "MIXED", "SYSTEM_DESIGN"].includes(interviewType)
+  ) {
     const types: KnowledgeSourceType[] = [
       "TECHNICAL_NOTES",
       "RESUME",
@@ -176,8 +155,16 @@ export async function retrieveForQuestion(context: {
     ];
     // If there's a project, also include its docs
     if (projectId) {
-      const projectChunks = await retrieveForProject(projectId, questionText, Math.ceil(topK / 2));
-      const topicChunks = await retrieveForTopic(types, questionText, Math.floor(topK / 2));
+      const projectChunks = await retrieveForProject(
+        projectId,
+        questionText,
+        Math.ceil(topK / 2),
+      );
+      const topicChunks = await retrieveForTopic(
+        types,
+        questionText,
+        Math.floor(topK / 2),
+      );
       // Deduplicate by documentId+chunkIndex
       const seen = new Set<string>();
       return [...projectChunks, ...topicChunks].filter((c) => {
@@ -208,25 +195,7 @@ export async function retrieveForQuestion(context: {
 
 async function retrieveForFull(
   query: string,
-  topK = 8
+  topK = 8,
 ): Promise<RetrievedChunk[]> {
-  const embedding = await embedQuery(query);
-  const vecStr = vectorToSql(embedding);
-
-  const rows = await prisma.$queryRaw<ChunkRow[]>`
-    SELECT
-      dc.id,
-      dc."documentId",
-      d.name AS "documentName",
-      dc."chunkIndex",
-      dc.content
-    FROM "DocumentChunk" dc
-    JOIN "Document" d ON dc."documentId" = d.id
-    WHERE d."processingStatus" = 'PROCESSED'
-      AND dc.embedding IS NOT NULL
-    ORDER BY dc.embedding <=> ${vecStr}::vector ASC
-    LIMIT ${topK}
-  `;
-
-  return mapRows(rows);
+  return retrieveChunks({ query, topK });
 }

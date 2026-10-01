@@ -1,0 +1,2 @@
+ALTER TABLE "Interview"
+ADD COLUMN "weaknesses" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

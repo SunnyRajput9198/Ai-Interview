@@ -1,3 +1,23 @@
-# Docker services for AI Interviewer
-# Whisper Docker removed — using AICredits API (https://api.aicredits.in/v1/audio/transcriptions)
-services: {}
+# Local development database. The bind address keeps PostgreSQL accessible only
+# from this machine; the named volume preserves data across container restarts.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: ai-interviewer-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_interviewer
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ai_interviewer_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_interviewer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ai_interviewer_pgdata:

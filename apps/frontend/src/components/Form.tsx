@@ -14,7 +14,14 @@ import {
   SelectValue,
 } from "./ui/select";
 
-type InterviewType = "TECHNICAL" | "PROJECT" | "HR" | "FULL";
+type InterviewType =
+  | "TECHNICAL"
+  | "PROJECT"
+  | "SYSTEM_DESIGN"
+  | "AI_ML"
+  | "MIXED"
+  | "HR"
+  | "FULL";
 
 interface Project {
   id: string;
@@ -27,18 +34,25 @@ export function Form() {
   const [searchParams] = useSearchParams();
 
   const [interviewType, setInterviewType] = useState<InterviewType>(
-    (searchParams.get("type") as InterviewType) ?? "TECHNICAL"
+    (searchParams.get("type") as InterviewType) ?? "TECHNICAL",
   );
-  const [projectId, setProjectId] = useState(searchParams.get("projectId") ?? "");
+  const [projectId, setProjectId] = useState(
+    searchParams.get("projectId") ?? "",
+  );
   const [topics, setTopics] = useState<string[]>([]);
+  const [questionLimit, setQuestionLimit] = useState("8");
   const [topicInput, setTopicInput] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [projectError, setProjectError] = useState("");
 
-  // Fetch projects for PROJECT type
+  // Fetch projects for modes that can use project knowledge.
   useEffect(() => {
-    if (interviewType === "PROJECT") {
+    if (
+      ["PROJECT", "SYSTEM_DESIGN", "AI_ML", "MIXED", "TECHNICAL"].includes(
+        interviewType,
+      )
+    ) {
       axios
         .get(`${BACKEND_URL}/api/projects`)
         .then((r) => setProjects(r.data))
@@ -70,8 +84,11 @@ export function Form() {
     try {
       const response = await axios.post(`${BACKEND_URL}/api/v1/pre-interview`, {
         interviewType,
-        ...(interviewType === "PROJECT" && projectId ? { projectId } : {}),
-        ...(interviewType === "TECHNICAL" && topics.length > 0 ? { topics } : {}),
+        ...(projectId ? { projectId } : {}),
+        ...(interviewType === "TECHNICAL" && topics.length > 0
+          ? { topics }
+          : {}),
+        questionLimit: Number(questionLimit),
       });
       navigate(`/interview/${response.data.id}`);
     } catch (e: any) {
@@ -95,8 +112,9 @@ export function Form() {
           Start an Interview
         </h1>
         <p className="mt-4 max-w-md text-balance text-base text-muted-foreground">
-          Choose your interview type, optionally select a project or topics, then go
-          live — AI will ask questions grounded in your uploaded documents.
+          Choose your interview type, optionally select a project or topics,
+          then go live — AI will ask questions grounded in your uploaded
+          documents.
         </p>
 
         <div className="mt-10 w-full space-y-3">
@@ -117,14 +135,21 @@ export function Form() {
               <SelectContent>
                 <SelectItem value="TECHNICAL">Technical Interview</SelectItem>
                 <SelectItem value="PROJECT">Project Interview</SelectItem>
+                <SelectItem value="SYSTEM_DESIGN">
+                  System Design Interview
+                </SelectItem>
+                <SelectItem value="AI_ML">AI / ML Interview</SelectItem>
+                <SelectItem value="MIXED">Mixed Technical Interview</SelectItem>
                 <SelectItem value="HR">HR / Behavioural Interview</SelectItem>
                 <SelectItem value="FULL">Full Interview</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          {/* Project selector (PROJECT type) */}
-          {interviewType === "PROJECT" && (
+          {/* Optional project context; required for PROJECT mode. */}
+          {["PROJECT", "SYSTEM_DESIGN", "AI_ML", "MIXED", "TECHNICAL"].includes(
+            interviewType,
+          ) && (
             <div className="rounded-xl border border-border bg-card/60 p-2 shadow-sm backdrop-blur">
               <Select
                 value={projectId || "__none__"}
@@ -135,7 +160,13 @@ export function Form() {
                 disabled={loading}
               >
                 <SelectTrigger className="w-full border-0 bg-transparent shadow-none focus:ring-0">
-                  <SelectValue placeholder="Select a project…" />
+                  <SelectValue
+                    placeholder={
+                      interviewType === "PROJECT"
+                        ? "Select a project…"
+                        : "Add optional project context…"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__" disabled>
@@ -143,7 +174,8 @@ export function Form() {
                   </SelectItem>
                   {projects.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
-                      {p.name} ({p.documentCount} doc{p.documentCount !== 1 ? "s" : ""})
+                      {p.name} ({p.documentCount} doc
+                      {p.documentCount !== 1 ? "s" : ""})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -182,6 +214,23 @@ export function Form() {
               )}
             </div>
           )}
+
+          <div className="rounded-xl border border-border bg-card/60 p-2 shadow-sm backdrop-blur">
+            <Select
+              value={questionLimit}
+              onValueChange={setQuestionLimit}
+              disabled={loading}
+            >
+              <SelectTrigger className="w-full border-0 bg-transparent shadow-none focus:ring-0">
+                <SelectValue placeholder="Question count" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="5">5 questions · focused</SelectItem>
+                <SelectItem value="8">8 questions · standard</SelectItem>
+                <SelectItem value="10">10 questions · extended</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Submit */}
           <Button

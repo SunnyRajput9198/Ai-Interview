@@ -1,40 +1,10 @@
 import { Router } from "express";
-import multer from "multer";
-import path from "path";
 import { prisma } from "../db";
 import { processDocument } from "../processing-pipeline";
+import { handleDocumentUpload } from "../document-upload";
+import { KnowledgeSourceTypeSchema } from "../types";
 
 const router = Router();
-
-// Multer config shared with documents route
-const maxSizeMB = parseInt(process.env.MAX_DOCUMENT_SIZE_MB ?? "20", 10);
-const ALLOWED_MIME_TYPES = new Set([
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, "uploads/"),
-  filename: (_req, file, cb) => {
-    const unique = `${Date.now()}-${crypto.randomUUID()}`;
-    const ext = path.extname(file.originalname);
-    cb(null, `${unique}${ext}`);
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: maxSizeMB * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Unsupported file type. Allowed: pdf, txt, md, docx"));
-    }
-  },
-});
 
 // POST /api/projects
 router.post("/", async (req, res) => {
@@ -78,7 +48,7 @@ router.get("/", async (_req, res) => {
       documentCount: p._count.documents,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
-    }))
+    })),
   );
 });
 
@@ -172,7 +142,7 @@ router.get("/:id/documents", async (req, res) => {
 });
 
 // POST /api/projects/:id/documents
-router.post("/:id/documents", upload.single("file"), async (req, res) => {
+router.post("/:id/documents", handleDocumentUpload, async (req, res) => {
   const pid = req.params["id"] as string;
   const project = await prisma.project.findUnique({ where: { id: pid } });
   if (!project) {
@@ -190,15 +160,16 @@ router.post("/:id/documents", upload.single("file"), async (req, res) => {
     description?: string;
   };
 
-  if (!knowledgeSourceType) {
-    res.status(400).json({ error: "knowledgeSourceType is required" });
+  const sourceType = KnowledgeSourceTypeSchema.safeParse(knowledgeSourceType);
+  if (!sourceType.success) {
+    res.status(400).json({ error: "A valid knowledgeSourceType is required" });
     return;
   }
 
   const doc = await prisma.document.create({
     data: {
       projectId: pid,
-      knowledgeSourceType: knowledgeSourceType as any,
+      knowledgeSourceType: sourceType.data,
       name: req.file.originalname,
       description: description?.trim() ?? null,
       mimeType: req.file.mimetype,

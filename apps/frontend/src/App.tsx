@@ -8,6 +8,8 @@ import { Dashboard } from "./components/Dashboard";
 import { ProjectsPage } from "./components/ProjectsPage";
 import { ProjectDetailPage } from "./components/ProjectDetailPage";
 import { KnowledgePage } from "./components/KnowledgePage";
+import { AIPracticePage } from "./components/AIPracticePage";
+import { AnalyticsPage } from "./components/AnalyticsPage";
 import { NavBar } from "./components/NavBar";
 
 // Layout wrapper for pages that show the nav bar
@@ -33,6 +35,8 @@ export function App() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
+          <Route path="/practice" element={<AIPracticePage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
         </Route>
 
         {/* Full-screen pages (no NavBar) */}
